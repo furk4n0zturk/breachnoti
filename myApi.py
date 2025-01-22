@@ -1,23 +1,40 @@
-from flask import Flask, request, jsonify
+import requests
 import pymysql
+import json
+from dotenv import load_dotenv
+import os
 
-app = Flask(__name__)
+# .env dosyasını yükleme
+load_dotenv()
 
-# API Anahtarları ve izin verilen domainler
-AUTHORIZED_KEYS = {
-    "apikey123456": [""],  # Bu anahtar sadece mu.edu.tr ve example.com domainleri için sorgu atabilir
-    "apikeyabcdef": ["anotherdomain.com"]          # Bu anahtar sadece anotherdomain.com için sorgu atabilir
-}
+# Dehashed API bilgileri
+EMAIL_DOMAIN = os.getenv("EMAIL_DOMAIN")
+DEHASHED_URL = f"https://api.dehashed.com/search?query=email:@\'{EMAIL_DOMAIN}\'"
+DEHASHED_USER = os.getenv("DEHASHED_USER")
+DEHASHED_PASS = os.getenv("DEHASHED_PASS")
 
 # Veritabanı bağlantı bilgileri
-DB_HOST = "localhost"
-DB_USER = "db_user"
-DB_PASS = "12345678**"
-DB_NAME = "breached_db"
+DB_HOST = os.getenv("DB_HOST")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
 
-# Veritabanına bağlanma
-def get_db_connection():
-    return pymysql.connect(
+# Dehashed API'den veri çekme
+def fetch_data():
+    response = requests.get(
+        DEHASHED_URL,
+        auth=(DEHASHED_USER, DEHASHED_PASS),
+        headers={"Accept": "application/json"}
+    )
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error fetching data: {response.status_code}")
+        return None
+
+# Veriyi veritabanına yazma
+def update_database(entries):
+    connection = pymysql.connect(
         host=DB_HOST,
         user=DB_USER,
         password=DB_PASS,
@@ -26,46 +43,40 @@ def get_db_connection():
         cursorclass=pymysql.cursors.DictCursor
     )
 
-# Yetkilendirme kontrolü
-def check_api_key(api_key):
-    return api_key in AUTHORIZED_KEYS
-
-# Domain izni kontrolü
-def check_domain_permission(api_key, domain):
-    allowed_domains = AUTHORIZED_KEYS.get(api_key, [])
-    return domain in allowed_domains
-
-# API endpoint: Veri çekme
-@app.route('/get-data', methods=['POST'])
-def get_data():
-    # API anahtarını kontrol et
-    api_key = request.headers.get('Authorization')
-    if not api_key or not check_api_key(api_key):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    # Domain bilgisini al
-    data = request.get_json()
-    domain = data.get("domain")
-    if not domain:
-        return jsonify({"error": "Domain is required"}), 400
-
-    # Domain izni kontrol et
-    if not check_domain_permission(api_key, domain):
-        return jsonify({"error": f"Access to domain '{domain}' is not allowed for this API key"}), 403
-
-    # Veritabanından veri çek
     try:
-        connection = get_db_connection()
         with connection.cursor() as cursor:
-            sql = "SELECT * FROM users WHERE email LIKE %s"
-            cursor.execute(sql, ('%' + domain,))
-            result = cursor.fetchall()
-        return jsonify({"data": result}), 200
+            for entry in entries:
+                email = entry.get("email", "")
+                username = entry.get("username", "")
+                database_name = entry.get("database_name", "")
+                id_value = entry.get("id", "")
+
+                # Veriyi ekleme veya güncelleme sorgusu
+                sql = """
+                INSERT INTO users (id, email, username, database_name)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                    email = VALUES(email),
+                    username = VALUES(username),
+                    database_name = VALUES(database_name);
+                """
+                cursor.execute(sql, (id_value, email, username, database_name))
+            
+            # Değişiklikleri kaydet
+            connection.commit()
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Database error: {e}")
     finally:
         connection.close()
 
-# API çalıştırma
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+# Main iş akışı
+def main():
+    data = fetch_data()
+    if data and "entries" in data:
+        update_database(data["entries"])
+    else:
+        print("No data to process.")
+
+if __name__ == "__main__":
+    main()
