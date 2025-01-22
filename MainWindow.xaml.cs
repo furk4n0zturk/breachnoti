@@ -57,7 +57,7 @@ namespace MonitorApp
                     var payload = new { domain = domain };
                     var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-                    HttpResponseMessage response = await client.PostAsync("http://188.34.204.202:5000/get-data", content);
+                    HttpResponseMessage response = await client.PostAsync("http://127.0.0.1:5000/get-data", content);
                     if (!response.IsSuccessStatusCode)
                     {
                         UpdateStatus($"API Hatası: {response.StatusCode}");
